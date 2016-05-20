@@ -1,0 +1,8 @@
+Currently supported S3 API primitives
+-------------------------------------
+multipart new
+multipart upload
+multipart complete
+multipart listuploads
+multipart listparts
+multipart abort
