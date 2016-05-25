@@ -174,18 +174,40 @@ func Debug() {
 	app.RunAndExitOnError()
 }
 
+type minioContext struct {
+	Endpoint      string
+	AccessKey     string
+	SecretKey     string
+	Secure, Trace bool
+}
+
+func newMinioContext(ctx *cli.Context) minioContext {
+	minioCtx := minioContext{}
+	minioCtx.Endpoint = ctx.GlobalString("endpoint")
+	if minioCtx.Endpoint == "" {
+		minioCtx.Endpoint = os.Getenv("ENDPOINT")
+	}
+	minioCtx.AccessKey = ctx.GlobalString("accesskey")
+	if minioCtx.AccessKey == "" {
+		minioCtx.AccessKey = os.Getenv("ACCESS_KEY")
+	}
+	minioCtx.SecretKey = ctx.GlobalString("secretkey")
+	if minioCtx.SecretKey == "" {
+		minioCtx.SecretKey = os.Getenv("SECRET_KEY")
+	}
+	minioCtx.Trace = ctx.GlobalBool("trace") || os.Getenv("TRACE") == "1"
+	minioCtx.Secure = ctx.GlobalBool("secure") || os.Getenv("SECURE") == "1"
+	return minioCtx
+}
+
 func debugMain(ctx *cli.Context) error {
-	endpoint := ctx.GlobalString("endpoint")
-	secure := ctx.GlobalBool("secure")
-	accessKey := ctx.GlobalString("accesskey")
-	secretKey := ctx.GlobalString("secretkey")
-	trace := ctx.GlobalBool("trace")
+	minioCtx := newMinioContext(ctx)
 	transport := http.DefaultTransport
-	if trace {
+	if minioCtx.Trace {
 		transport = httptracer.GetNewTraceTransport(newTraceV4(), http.DefaultTransport)
 	}
 	var err error
-	debugClient, err = New(endpoint, accessKey, secretKey, secure)
+	debugClient, err = New(minioCtx.Endpoint, minioCtx.AccessKey, minioCtx.SecretKey, minioCtx.Secure)
 	if err != nil {
 		fmt.Println(err)
 		cli.ShowCommandHelp(ctx, "")
