@@ -1,6 +1,7 @@
 package minio
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -17,6 +18,11 @@ import (
 )
 
 var debugClient *Client
+
+func handleOutput(v interface{}) {
+	out, _ := json.MarshalIndent(v, "", "  ")
+	os.Stdout.Write(out)
+}
 
 // Debug - entry.
 func Debug() {
@@ -225,7 +231,7 @@ func debugNewMultipart(ctx *cli.Context) {
 		log.Fatal(err)
 		cli.ShowCommandHelp(ctx, "")
 	}
-	fmt.Println(result.UploadID)
+	handleOutput(result)
 }
 
 func debugUploadPart(ctx *cli.Context) {
@@ -250,7 +256,7 @@ func debugUploadPart(ctx *cli.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(part)
+	handleOutput(part)
 }
 
 func debugCompleteMultipart(ctx *cli.Context) {
@@ -275,7 +281,7 @@ func debugCompleteMultipart(ctx *cli.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(result)
+	handleOutput(result)
 }
 
 func debugListMultipartUploads(ctx *cli.Context) {
@@ -292,24 +298,7 @@ func debugListMultipartUploads(ctx *cli.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("bucket : ", result.Bucket)
-	fmt.Println("keymarker : ", result.KeyMarker)
-	fmt.Println("uploadidmarker : ", result.UploadIDMarker)
-	fmt.Println("nextkeymarker : ", result.NextKeyMarker)
-	fmt.Println("nextuploadidmarker : ", result.NextUploadIDMarker)
-	fmt.Println("encodingtype : ", result.EncodingType)
-	fmt.Println("maxuploads : ", result.MaxUploads)
-	fmt.Println("istruncated : ", result.IsTruncated)
-	fmt.Println("prefix : ", result.Prefix)
-	fmt.Println("delimiter : ", result.Delimiter)
-	fmt.Println("uploads :")
-	for i, upload := range result.Uploads {
-		fmt.Printf("  %d : %s, %s\n", i+1, upload.Key, upload.UploadID)
-	}
-	fmt.Println("commonprefixes : ")
-	for i, p := range result.CommonPrefixes {
-		fmt.Printf("  %d : %s\n", i+1, p)
-	}
+	handleOutput(result)
 }
 
 func debugListUploadParts(ctx *cli.Context) {
@@ -322,15 +311,7 @@ func debugListUploadParts(ctx *cli.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("bucket : ", result.Bucket)
-	fmt.Println("object : ", result.Key)
-	fmt.Println("uploadid : ", result.UploadID)
-	fmt.Println("nextpartmarker : ", result.NextPartNumberMarker)
-	fmt.Println("istruncated : ", result.IsTruncated)
-	fmt.Println("parts :")
-	for i, part := range result.ObjectParts {
-		fmt.Printf("  %d : %d %s %d\n", i+1, part.PartNumber, part.ETag, part.Size)
-	}
+	handleOutput(result)
 }
 
 func debugAbortMultipartUpload(ctx *cli.Context) {
@@ -339,6 +320,11 @@ func debugAbortMultipartUpload(ctx *cli.Context) {
 	uploadID := ctx.String("uploadid")
 	err := debugClient.abortMultipartUpload(bucketName, objectName, uploadID)
 	if err != nil {
-		log.Fatal(err)
+		handleOutput(struct {
+			Status bool
+			Msg    string
+		}{false, err.Error()})
+		return
 	}
+	handleOutput(struct{ Status bool }{true})
 }
