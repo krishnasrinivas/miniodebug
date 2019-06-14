@@ -1,5 +1,6 @@
 /*
- * Minio Go Library for Amazon S3 Compatible Cloud Storage (C) 2015 Minio, Inc.
+ * MinIO Go Library for Amazon S3 Compatible Cloud Storage
+ * Copyright 2015-2017 MinIO, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,25 +19,44 @@ package minio
 
 /// Multipart upload defaults.
 
-// miniPartSize - minimum part size 5MiB per object after which
+// absMinPartSize - absolute minimum part size (5 MiB) below which
+// a part in a multipart upload may not be uploaded.
+const absMinPartSize = 1024 * 1024 * 5
+
+// minPartSize - minimum part size 128MiB per object after which
 // putObject behaves internally as multipart.
-const minPartSize = 1024 * 1024 * 5
+const minPartSize = 1024 * 1024 * 128
 
 // maxPartsCount - maximum number of parts for a single multipart session.
 const maxPartsCount = 10000
 
 // maxPartSize - maximum part size 5GiB for a single multipart upload
 // operation.
-const maxPartSize = 1024 * 1024 * 1024 * 5
+const maxPartSize = 1024 * 1024 * 1024 * 500
 
 // maxSinglePutObjectSize - maximum size 5GiB of object per PUT
 // operation.
-const maxSinglePutObjectSize = 1024 * 1024 * 1024 * 5
+const maxSinglePutObjectSize = 1024 * 1024 * 1024 * 500
 
 // maxMultipartPutObjectSize - maximum size 5TiB of object for
 // Multipart operation.
-const maxMultipartPutObjectSize = 1024 * 1024 * 1024 * 1024 * 5
+const maxMultipartPutObjectSize = 1024 * 1024 * 1024 * 1024 * 500
 
-// optimalReadBufferSize - optimal buffer 5MiB used for reading
-// through Read operation.
-const optimalReadBufferSize = 1024 * 1024 * 5
+// unsignedPayload - value to be set to X-Amz-Content-Sha256 header when
+// we don't want to sign the request payload
+const unsignedPayload = "UNSIGNED-PAYLOAD"
+
+// Total number of parallel workers used for multipart operation.
+const totalWorkers = 4
+
+// Signature related constants.
+const (
+	signV4Algorithm   = "AWS4-HMAC-SHA256"
+	iso8601DateFormat = "20060102T150405Z"
+)
+
+// Storage class header constant.
+const amzStorageClass = "X-Amz-Storage-Class"
+
+// Website redirect location header constant
+const amzWebsiteRedirectLocation = "X-Amz-Website-Redirect-Location"

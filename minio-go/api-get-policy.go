@@ -1,5 +1,6 @@
 /*
- * Minio Go Library for Amazon S3 Compatible Cloud Storage (C) 2015, 2016 Minio, Inc.
+ * MinIO Go Library for Amazon S3 Compatible Cloud Storage
+ * Copyright 2015-2017 MinIO, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,76 +18,61 @@
 package minio
 
 import (
-	"io"
+	"context"
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"sort"
+
+	"github.com/minio/minio-go/v6/pkg/s3utils"
 )
 
 // GetBucketPolicy - get bucket policy at a given path.
-func (c Client) GetBucketPolicy(bucketName, objectPrefix string) (bucketPolicy BucketPolicy, err error) {
+func (c Client) GetBucketPolicy(bucketName string) (string, error) {
 	// Input validation.
-	if err := isValidBucketName(bucketName); err != nil {
-		return BucketPolicyNone, err
+	if err := s3utils.CheckValidBucketName(bucketName); err != nil {
+		return "", err
 	}
-	if err := isValidObjectPrefix(objectPrefix); err != nil {
-		return BucketPolicyNone, err
-	}
-	policy, err := c.getBucketPolicy(bucketName, objectPrefix)
+	bucketPolicy, err := c.getBucketPolicy(bucketName)
 	if err != nil {
-		return BucketPolicyNone, err
+		errResponse := ToErrorResponse(err)
+		if errResponse.Code == "NoSuchBucketPolicy" {
+			return "", nil
+		}
+		return "", err
 	}
-	return identifyPolicyType(policy, bucketName, objectPrefix), nil
+	return bucketPolicy, nil
 }
 
-// Request server for policy.
-func (c Client) getBucketPolicy(bucketName string, objectPrefix string) (BucketAccessPolicy, error) {
+// Request server for current bucket policy.
+func (c Client) getBucketPolicy(bucketName string) (string, error) {
 	// Get resources properly escaped and lined up before
 	// using them in http request.
 	urlValues := make(url.Values)
 	urlValues.Set("policy", "")
 
 	// Execute GET on bucket to list objects.
-	resp, err := c.executeMethod("GET", requestMetadata{
-		bucketName:  bucketName,
-		queryValues: urlValues,
+	resp, err := c.executeMethod(context.Background(), "GET", requestMetadata{
+		bucketName:       bucketName,
+		queryValues:      urlValues,
+		contentSHA256Hex: emptySHA256Hex,
 	})
 
 	defer closeResponse(resp)
 	if err != nil {
-		return BucketAccessPolicy{}, err
+		return "", err
 	}
-	return processBucketPolicyResponse(bucketName, resp)
 
-}
-
-// processes the GetPolicy http response from the server.
-func processBucketPolicyResponse(bucketName string, resp *http.Response) (BucketAccessPolicy, error) {
 	if resp != nil {
 		if resp.StatusCode != http.StatusOK {
-			errResponse := httpRespToErrorResponse(resp, bucketName, "")
-			if ToErrorResponse(errResponse).Code == "NoSuchBucketPolicy" {
-				return BucketAccessPolicy{Version: "2012-10-17"}, nil
-			}
-			return BucketAccessPolicy{}, errResponse
+			return "", httpRespToErrorResponse(resp, bucketName, "")
 		}
 	}
-	// Read access policy up to maxAccessPolicySize.
-	// http://docs.aws.amazon.com/AmazonS3/latest/dev/access-policy-language-overview.html
-	// bucket policies are limited to 20KB in size, using a limit reader.
-	bucketPolicyBuf, err := ioutil.ReadAll(io.LimitReader(resp.Body, maxAccessPolicySize))
+
+	bucketPolicyBuf, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return BucketAccessPolicy{}, err
+		return "", err
 	}
-	policy, err := unMarshalBucketPolicy(bucketPolicyBuf)
-	if err != nil {
-		return BucketAccessPolicy{}, err
-	}
-	// Sort the policy actions and resources for convenience.
-	for _, statement := range policy.Statements {
-		sort.Strings(statement.Actions)
-		sort.Strings(statement.Resources)
-	}
-	return policy, nil
+
+	policy := string(bucketPolicyBuf)
+	return policy, err
 }

@@ -1,5 +1,6 @@
 /*
- * Minio Go Library for Amazon S3 Compatible Cloud Storage (C) 2015, 2016 Minio, Inc.
+ * MinIO Go Library for Amazon S3 Compatible Cloud Storage
+ * Copyright 2015-2017 MinIO, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +26,7 @@ import (
 )
 
 // MaxRetry is the maximum number of retries before stopping.
-var MaxRetry = 5
+var MaxRetry = 10
 
 // MaxJitter will randomize over the full exponential backoff time
 const MaxJitter = 1.0
@@ -33,8 +34,16 @@ const MaxJitter = 1.0
 // NoJitter disables the use of jitter for randomizing the exponential backoff time
 const NoJitter = 0.0
 
-// newRetryTimer creates a timer with exponentially increasing delays
-// until the maximum retry attempts are reached.
+// DefaultRetryUnit - default unit multiplicative per retry.
+// defaults to 1 second.
+const DefaultRetryUnit = time.Second
+
+// DefaultRetryCap - Each retry attempt never waits no longer than
+// this maximum time duration.
+const DefaultRetryCap = time.Second * 30
+
+// newRetryTimer creates a timer with exponentially increasing
+// delays until the maximum retry attempts are reached.
 func (c Client) newRetryTimer(maxRetry int, unit time.Duration, cap time.Duration, jitter float64, doneCh chan struct{}) <-chan int {
 	attemptCh := make(chan int)
 
@@ -76,27 +85,35 @@ func (c Client) newRetryTimer(maxRetry int, unit time.Duration, cap time.Duratio
 	return attemptCh
 }
 
-// isNetErrorRetryable - is network error retryable.
-func isNetErrorRetryable(err error) bool {
-	switch err.(type) {
-	case net.Error:
-		switch err.(type) {
+// isHTTPReqErrorRetryable - is http requests error retryable, such
+// as i/o timeout, connection broken etc..
+func isHTTPReqErrorRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch e := err.(type) {
+	case *url.Error:
+		switch e.Err.(type) {
 		case *net.DNSError, *net.OpError, net.UnknownNetworkError:
 			return true
-		case *url.Error:
-			// For a URL error, where it replies back "connection closed"
-			// retry again.
-			if strings.Contains(err.Error(), "Connection closed by foreign host") {
-				return true
-			}
-		default:
-			if strings.Contains(err.Error(), "net/http: TLS handshake timeout") {
-				// If error is - tlsHandshakeTimeoutError, retry.
-				return true
-			} else if strings.Contains(err.Error(), "i/o timeout") {
-				// If error is - tcp timeoutError, retry.
-				return true
-			}
+		}
+		if strings.Contains(err.Error(), "Connection closed by foreign host") {
+			return true
+		} else if strings.Contains(err.Error(), "net/http: TLS handshake timeout") {
+			// If error is - tlsHandshakeTimeoutError, retry.
+			return true
+		} else if strings.Contains(err.Error(), "i/o timeout") {
+			// If error is - tcp timeoutError, retry.
+			return true
+		} else if strings.Contains(err.Error(), "connection timed out") {
+			// If err is a net.Dial timeout, retry.
+			return true
+		} else if strings.Contains(err.Error(), "net/http: HTTP/1.x transport connection broken") {
+			// If error is transport connection broken, retry.
+			return true
+		} else if strings.Contains(err.Error(), "net/http: timeout awaiting response headers") {
+			// Retry errors due to server not sending the response before timeout
+			return true
 		}
 	}
 	return false
@@ -113,6 +130,7 @@ var retryableS3Codes = map[string]struct{}{
 	"InternalError":         {},
 	"ExpiredToken":          {},
 	"ExpiredTokenException": {},
+	"SlowDown":              {},
 	// Add more AWS S3 codes here.
 }
 
@@ -124,10 +142,11 @@ func isS3CodeRetryable(s3Code string) (ok bool) {
 
 // List of HTTP status codes which are retryable.
 var retryableHTTPStatusCodes = map[int]struct{}{
-	429: {}, // http.StatusTooManyRequests is not part of the Go 1.5 library, yet
+	429:                            {}, // http.StatusTooManyRequests is not part of the Go 1.5 library, yet
 	http.StatusInternalServerError: {},
 	http.StatusBadGateway:          {},
 	http.StatusServiceUnavailable:  {},
+	http.StatusGatewayTimeout:      {},
 	// Add more HTTP status codes here.
 }
 

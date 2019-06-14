@@ -1,5 +1,6 @@
 /*
- * Minio Go Library for Amazon S3 Compatible Cloud Storage (C) 2015 Minio, Inc.
+ * MinIO Go Library for Amazon S3 Compatible Cloud Storage
+ * Copyright 2015-2017 MinIO, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +22,7 @@ import (
 	"encoding/xml"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 )
 
 // Contains common used utilities for tests.
@@ -61,4 +63,13 @@ func encodeResponse(response interface{}) []byte {
 	encode := xml.NewEncoder(&bytesBuffer)
 	encode.Encode(response)
 	return bytesBuffer.Bytes()
+}
+
+// Convert string to bool and always return false if any error
+func mustParseBool(str string) bool {
+	b, err := strconv.ParseBool(str)
+	if err != nil {
+		return false
+	}
+	return b
 }

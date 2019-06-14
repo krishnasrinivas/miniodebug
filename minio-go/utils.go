@@ -1,5 +1,6 @@
 /*
- * Minio Go Library for Amazon S3 Compatible Cloud Storage (C) 2015 Minio, Inc.
+ * MinIO Go Library for Amazon S3 Compatible Cloud Storage
+ * Copyright 2015-2017 MinIO, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,10 +18,9 @@
 package minio
 
 import (
-	"bytes"
-	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
 	"io"
@@ -29,10 +29,10 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	"github.com/minio/minio-go/v6/pkg/s3utils"
 )
 
 // xmlDecoder provide decoded value in xml.
@@ -41,25 +41,18 @@ func xmlDecoder(body io.Reader, v interface{}) error {
 	return d.Decode(v)
 }
 
-// sum256 calculate sha256 sum for an input byte array.
-func sum256(data []byte) []byte {
+// sum256 calculate sha256sum for an input byte array, returns hex encoded.
+func sum256Hex(data []byte) string {
 	hash := sha256.New()
 	hash.Write(data)
-	return hash.Sum(nil)
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// sumMD5 calculate sumMD5 sum for an input byte array.
-func sumMD5(data []byte) []byte {
+// sumMD5Base64 calculate md5sum for an input byte array, returns base64 encoded.
+func sumMD5Base64(data []byte) string {
 	hash := md5.New()
 	hash.Write(data)
-	return hash.Sum(nil)
-}
-
-// sumHMAC calculate hmac between two input byte array.
-func sumHMAC(key []byte, data []byte) []byte {
-	hash := hmac.New(sha256.New, key)
-	hash.Write(data)
-	return hash.Sum(nil)
+	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
 }
 
 // getEndpointURL - construct a new endpoint.
@@ -69,12 +62,12 @@ func getEndpointURL(endpoint string, secure bool) (*url.URL, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !isValidIP(host) && !isValidDomain(host) {
+		if !s3utils.IsValidIP(host) && !s3utils.IsValidDomain(host) {
 			msg := "Endpoint: " + endpoint + " does not follow ip address or domain name standards."
 			return nil, ErrInvalidArgument(msg)
 		}
 	} else {
-		if !isValidIP(endpoint) && !isValidDomain(endpoint) {
+		if !s3utils.IsValidIP(endpoint) && !s3utils.IsValidDomain(endpoint) {
 			msg := "Endpoint: " + endpoint + " does not follow ip address or domain name standards."
 			return nil, ErrInvalidArgument(msg)
 		}
@@ -93,43 +86,10 @@ func getEndpointURL(endpoint string, secure bool) (*url.URL, error) {
 	}
 
 	// Validate incoming endpoint URL.
-	if err := isValidEndpointURL(endpointURL); err != nil {
+	if err := isValidEndpointURL(*endpointURL); err != nil {
 		return nil, err
 	}
 	return endpointURL, nil
-}
-
-// isValidDomain validates if input string is a valid domain name.
-func isValidDomain(host string) bool {
-	// See RFC 1035, RFC 3696.
-	host = strings.TrimSpace(host)
-	if len(host) == 0 || len(host) > 255 {
-		return false
-	}
-	// host cannot start or end with "-"
-	if host[len(host)-1:] == "-" || host[:1] == "-" {
-		return false
-	}
-	// host cannot start or end with "_"
-	if host[len(host)-1:] == "_" || host[:1] == "_" {
-		return false
-	}
-	// host cannot start or end with a "."
-	if host[len(host)-1:] == "." || host[:1] == "." {
-		return false
-	}
-	// All non alphanumeric characters are invalid.
-	if strings.ContainsAny(host, "`~!@#$%^&*()+={}[]|\\\"';:><?/") {
-		return false
-	}
-	// No need to regexp match, since the list is non-exhaustive.
-	// We let it valid and fail later.
-	return true
-}
-
-// isValidIP parses input string for ip address validity.
-func isValidIP(ip string) bool {
-	return net.ParseIP(ip) != nil
 }
 
 // closeResponse close non nil response with any response Body.
@@ -152,73 +112,29 @@ func closeResponse(resp *http.Response) {
 	}
 }
 
-// isVirtualHostSupported - verifies if bucketName can be part of
-// virtual host. Currently only Amazon S3 and Google Cloud Storage would
-// support this.
-func isVirtualHostSupported(endpointURL *url.URL, bucketName string) bool {
-	// bucketName can be valid but '.' in the hostname will fail SSL
-	// certificate validation. So do not use host-style for such buckets.
-	if endpointURL.Scheme == "https" && strings.Contains(bucketName, ".") {
-		return false
-	}
-	// Return true for all other cases
-	return isAmazonEndpoint(endpointURL) || isGoogleEndpoint(endpointURL)
-}
+var (
+	// Hex encoded string of nil sha256sum bytes.
+	emptySHA256Hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-// Match if it is exactly Amazon S3 endpoint.
-func isAmazonEndpoint(endpointURL *url.URL) bool {
-	if endpointURL == nil {
-		return false
-	}
-	if endpointURL.Host == "s3.amazonaws.com" {
-		return true
-	}
-	if isAmazonChinaEndpoint(endpointURL) {
-		return true
-	}
-	return false
-}
-
-// Match if it is exactly Amazon S3 China endpoint.
-// Customers who wish to use the new Beijing Region are required to sign up for a separate set of account credentials unique to the China (Beijing) Region.
-// Customers with existing AWS credentials will not be able to access resources in the new Region, and vice versa."
-// For more info https://aws.amazon.com/about-aws/whats-new/2013/12/18/announcing-the-aws-china-beijing-region/
-func isAmazonChinaEndpoint(endpointURL *url.URL) bool {
-	if endpointURL == nil {
-		return false
-	}
-	if endpointURL.Host == "s3.cn-north-1.amazonaws.com.cn" {
-		return true
-	}
-	return false
-}
-
-// Match if it is exactly Google cloud storage endpoint.
-func isGoogleEndpoint(endpointURL *url.URL) bool {
-	if endpointURL == nil {
-		return false
-	}
-	if endpointURL.Host == "storage.googleapis.com" {
-		return true
-	}
-	return false
-}
+	// Sentinel URL is the default url value which is invalid.
+	sentinelURL = url.URL{}
+)
 
 // Verify if input endpoint URL is valid.
-func isValidEndpointURL(endpointURL *url.URL) error {
-	if endpointURL == nil {
+func isValidEndpointURL(endpointURL url.URL) error {
+	if endpointURL == sentinelURL {
 		return ErrInvalidArgument("Endpoint url cannot be empty.")
 	}
 	if endpointURL.Path != "/" && endpointURL.Path != "" {
 		return ErrInvalidArgument("Endpoint url cannot have fully qualified paths.")
 	}
-	if strings.Contains(endpointURL.Host, ".amazonaws.com") {
-		if !isAmazonEndpoint(endpointURL) {
+	if strings.Contains(endpointURL.Host, ".s3.amazonaws.com") {
+		if !s3utils.IsAmazonEndpoint(endpointURL) {
 			return ErrInvalidArgument("Amazon S3 endpoint should be 's3.amazonaws.com'.")
 		}
 	}
 	if strings.Contains(endpointURL.Host, ".googleapis.com") {
-		if !isGoogleEndpoint(endpointURL) {
+		if !s3utils.IsGoogleEndpoint(endpointURL) {
 			return ErrInvalidArgument("Google Cloud Storage endpoint should be 'storage.googleapis.com'.")
 		}
 	}
@@ -237,121 +153,120 @@ func isValidExpiry(expires time.Duration) error {
 	return nil
 }
 
-// We support '.' with bucket names but we fallback to using path
-// style requests instead for such buckets.
-var validBucketName = regexp.MustCompile(`^[a-z0-9][a-z0-9\.\-]{1,61}[a-z0-9]$`)
-
-// isValidBucketName - verify bucket name in accordance with
-//  - http://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html
-func isValidBucketName(bucketName string) error {
-	if strings.TrimSpace(bucketName) == "" {
-		return ErrInvalidBucketName("Bucket name cannot be empty.")
+// make a copy of http.Header
+func cloneHeader(h http.Header) http.Header {
+	h2 := make(http.Header, len(h))
+	for k, vv := range h {
+		vv2 := make([]string, len(vv))
+		copy(vv2, vv)
+		h2[k] = vv2
 	}
-	if len(bucketName) < 3 {
-		return ErrInvalidBucketName("Bucket name cannot be smaller than 3 characters.")
-	}
-	if len(bucketName) > 63 {
-		return ErrInvalidBucketName("Bucket name cannot be greater than 63 characters.")
-	}
-	if bucketName[0] == '.' || bucketName[len(bucketName)-1] == '.' {
-		return ErrInvalidBucketName("Bucket name cannot start or end with a '.' dot.")
-	}
-	if match, _ := regexp.MatchString("\\.\\.", bucketName); match {
-		return ErrInvalidBucketName("Bucket name cannot have successive periods.")
-	}
-	if !validBucketName.MatchString(bucketName) {
-		return ErrInvalidBucketName("Bucket name contains invalid characters.")
-	}
-	return nil
+	return h2
 }
 
-// isValidObjectName - verify object name in accordance with
-//   - http://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html
-func isValidObjectName(objectName string) error {
-	if strings.TrimSpace(objectName) == "" {
-		return ErrInvalidObjectName("Object name cannot be empty.")
+// Filter relevant response headers from
+// the HEAD, GET http response. The function takes
+// a list of headers which are filtered out and
+// returned as a new http header.
+func filterHeader(header http.Header, filterKeys []string) (filteredHeader http.Header) {
+	filteredHeader = cloneHeader(header)
+	for _, key := range filterKeys {
+		filteredHeader.Del(key)
 	}
-	if len(objectName) > 1024 {
-		return ErrInvalidObjectName("Object name cannot be greater than 1024 characters.")
-	}
-	if !utf8.ValidString(objectName) {
-		return ErrInvalidBucketName("Object name with non UTF-8 strings are not supported.")
-	}
-	return nil
+	return filteredHeader
 }
 
-// isValidObjectPrefix - verify if object prefix is valid.
-func isValidObjectPrefix(objectPrefix string) error {
-	if len(objectPrefix) > 1024 {
-		return ErrInvalidObjectPrefix("Object prefix cannot be greater than 1024 characters.")
+// regCred matches credential string in HTTP header
+var regCred = regexp.MustCompile("Credential=([A-Z0-9]+)/")
+
+// regCred matches signature string in HTTP header
+var regSign = regexp.MustCompile("Signature=([[0-9a-f]+)")
+
+// Redact out signature value from authorization string.
+func redactSignature(origAuth string) string {
+	if !strings.HasPrefix(origAuth, signV4Algorithm) {
+		// Set a temporary redacted auth
+		return "AWS **REDACTED**:**REDACTED**"
 	}
-	if !utf8.ValidString(objectPrefix) {
-		return ErrInvalidObjectPrefix("Object prefix with non UTF-8 strings are not supported.")
-	}
-	return nil
+
+	/// Signature V4 authorization header.
+
+	// Strip out accessKeyID from:
+	// Credential=<access-key-id>/<date>/<aws-region>/<aws-service>/aws4_request
+	newAuth := regCred.ReplaceAllString(origAuth, "Credential=**REDACTED**/")
+
+	// Strip out 256-bit signature from: Signature=<256-bit signature>
+	return regSign.ReplaceAllString(newAuth, "Signature=**REDACTED**")
 }
 
-// queryEncode - encodes query values in their URL encoded form.
-func queryEncode(v url.Values) string {
-	if v == nil {
-		return ""
-	}
-	var buf bytes.Buffer
-	keys := make([]string, 0, len(v))
-	for k := range v {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		vs := v[k]
-		prefix := urlEncodePath(k) + "="
-		for _, v := range vs {
-			if buf.Len() > 0 {
-				buf.WriteByte('&')
-			}
-			buf.WriteString(prefix)
-			buf.WriteString(urlEncodePath(v))
-		}
-	}
-	return buf.String()
-}
-
-// urlEncodePath encode the strings from UTF-8 byte representations to HTML hex escape sequences
+// Get default location returns the location based on the input
+// URL `u`, if region override is provided then all location
+// defaults to regionOverride.
 //
-// This is necessary since regular url.Parse() and url.Encode() functions do not support UTF-8
-// non english characters cannot be parsed due to the nature in which url.Encode() is written
-//
-// This function on the other hand is a direct replacement for url.Encode() technique to support
-// pretty much every UTF-8 character.
-func urlEncodePath(pathName string) string {
-	// if object matches reserved string, no need to encode them
-	reservedNames := regexp.MustCompile("^[a-zA-Z0-9-_.~/]+$")
-	if reservedNames.MatchString(pathName) {
-		return pathName
+// If no other cases match then the location is set to `us-east-1`
+// as a last resort.
+func getDefaultLocation(u url.URL, regionOverride string) (location string) {
+	if regionOverride != "" {
+		return regionOverride
 	}
-	var encodedPathname string
-	for _, s := range pathName {
-		if 'A' <= s && s <= 'Z' || 'a' <= s && s <= 'z' || '0' <= s && s <= '9' { // §2.3 Unreserved characters (mark)
-			encodedPathname = encodedPathname + string(s)
-			continue
-		}
-		switch s {
-		case '-', '_', '.', '~', '/': // §2.3 Unreserved characters (mark)
-			encodedPathname = encodedPathname + string(s)
-			continue
-		default:
-			len := utf8.RuneLen(s)
-			if len < 0 {
-				// if utf8 cannot convert return the same string as is
-				return pathName
-			}
-			u := make([]byte, len)
-			utf8.EncodeRune(u, s)
-			for _, r := range u {
-				hex := hex.EncodeToString([]byte{r})
-				encodedPathname = encodedPathname + "%" + strings.ToUpper(hex)
-			}
+	region := s3utils.GetRegionFromURL(u)
+	if region == "" {
+		region = "us-east-1"
+	}
+	return region
+}
+
+var supportedHeaders = []string{
+	"content-type",
+	"cache-control",
+	"content-encoding",
+	"content-disposition",
+	"content-language",
+	"x-amz-website-redirect-location",
+	"expires",
+	// Add more supported headers here.
+}
+
+// isStorageClassHeader returns true if the header is a supported storage class header
+func isStorageClassHeader(headerKey string) bool {
+	return strings.EqualFold(amzStorageClass, headerKey)
+}
+
+// isStandardHeader returns true if header is a supported header and not a custom header
+func isStandardHeader(headerKey string) bool {
+	key := strings.ToLower(headerKey)
+	for _, header := range supportedHeaders {
+		if strings.ToLower(header) == key {
+			return true
 		}
 	}
-	return encodedPathname
+	return false
+}
+
+// sseHeaders is list of server side encryption headers
+var sseHeaders = []string{
+	"x-amz-server-side-encryption",
+	"x-amz-server-side-encryption-aws-kms-key-id",
+	"x-amz-server-side-encryption-context",
+	"x-amz-server-side-encryption-customer-algorithm",
+	"x-amz-server-side-encryption-customer-key",
+	"x-amz-server-side-encryption-customer-key-MD5",
+}
+
+// isSSEHeader returns true if header is a server side encryption header.
+func isSSEHeader(headerKey string) bool {
+	key := strings.ToLower(headerKey)
+	for _, h := range sseHeaders {
+		if strings.ToLower(h) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// isAmzHeader returns true if header is a x-amz-meta-* or x-amz-acl header.
+func isAmzHeader(headerKey string) bool {
+	key := strings.ToLower(headerKey)
+
+	return strings.HasPrefix(key, "x-amz-meta-") || strings.HasPrefix(key, "x-amz-grant-") || key == "x-amz-acl" || isSSEHeader(headerKey)
 }
